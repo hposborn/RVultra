@@ -606,8 +606,23 @@ class Vector_PlanetLikelihood():
         #print(i,np.sum(idx_planet1),np.sum(np.array(results['positions'][2])==-2),times,ttimes[n][:,0],sigma2)
         return finetmodels
     
-    def plot(self,points,weights,savetype='pdf'):
+    def sample(self,resume=True):
+        self.fixsampler = ultranest.ReactiveNestedSampler(self.varnames, self, VectorPriorTransform(self.varpars), 
+                                                          log_dir=self.outfileloc, resume=resume, vectorized=True,
+                                                          wrapped_params=['w_' in par for par in self.varnames])
+        self.result = self.fixsampler.run()
+        self.fixsampler.print_results()
+
+    def sample_plots(self):
+        assert hasattr(self,'result'), "Must have run `sample` before plotting"
+        self.fixsampler.plot_run()
+        self.fixsampler.plot_trace()
+        self.fixsampler.plot_corner()
+
+    def rv_plot(self,savetype='pdf'):
         #Plotting regions as split panel plot: One panel for each planet, plus the timeseries.
+        points=self.result['weighted_samples']['points']
+        weights=self.result['weighted_samples']['weights']
         from matplotlib import gridspec
         import matplotlib.pyplot as plt
 
@@ -756,122 +771,122 @@ class Vector_PlanetLikelihood():
             os.mkdir(os.path.join(self.outfileloc,"plots"))
         fig.savefig(os.path.join(self.outfileloc,"plots"+self.name+"fit_rvmodel_plot"+savetype))
     
-    def summarise_results(self,result):
+    def summarise_results(self):
 
         prcnts={'-2sig':2.2750132, '-1sig':15.8655254, 'med':50., '+1sig':84.1344746, '+2sig':97.7249868,'+3sig':99.74}
         summary_df={}
-        for n_v, var in enumerate(result['paramnames']):
-            av,sd=weighted_avg_and_std(result['weighted_samples']['points'][:,n_v],errs=None,weights=result['weighted_samples']['weights'])
+        for n_v, var in enumerate(self.result['paramnames']):
+            av,sd=weighted_avg_and_std(self.result['weighted_samples']['points'][:,n_v],errs=None,weights=self.result['weighted_samples']['weights'])
             summary_df[var]={'mean':av,'sd':sd}
-            summary_df[var].update({ipc:weighted_quantile(result['weighted_samples']['points'][:,n_v], 0.01*prcnts[ipc], sample_weight=result['weighted_samples']['weights']) for ipc in prcnts})
+            summary_df[var].update({ipc:weighted_quantile(self.result['weighted_samples']['points'][:,n_v], 0.01*prcnts[ipc], sample_weight=self.result['weighted_samples']['weights']) for ipc in prcnts})
         for pl in self.pls:
             if self.kprior=='log':
-                k=np.exp(result['weighted_samples']['points'][:,self.plinfo['x_index']['logk_'+pl]])
-            if 'per_'+pl in result['paramnames']:
-                per=result['weighted_samples']['points'][:,self.plinfo['x_index']['per_'+pl]]
+                k=np.exp(self.result['weighted_samples']['points'][:,self.plinfo['x_index']['logk_'+pl]])
+            if 'per_'+pl in self.result['paramnames']:
+                per=self.result['weighted_samples']['points'][:,self.plinfo['x_index']['per_'+pl]]
             else:
                 per=self.plinfo['per_'+pl]
 
-            if 'e_'+pl in result['paramnames']:
-                e=result['weighted_samples']['points'][:,self.plinfo['x_index']['e_'+pl]]
+            if 'e_'+pl in self.result['paramnames']:
+                e=self.result['weighted_samples']['points'][:,self.plinfo['x_index']['e_'+pl]]
             elif self.fit_circ:
                 e=0
 
             mpls=((per*86400/(2*np.pi*6.6e-11))**(1/3)*k*(self.Ms*1.96e30)**(2/3)*np.sqrt(1-e**2))/5.96e24
-            av,sd=weighted_avg_and_std(mpls, errs=None,weights=result['weighted_samples']['weights'])
+            av,sd=weighted_avg_and_std(mpls, errs=None,weights=self.result['weighted_samples']['weights'])
             summary_df['mpsini_'+pl]={'mean':av, 'sd':sd}
-            summary_df['mpsini_'+pl].update({ipc:weighted_quantile(mpls, 0.01*prcnts[ipc], sample_weight=result['weighted_samples']['weights']) for ipc in prcnts})
+            summary_df['mpsini_'+pl].update({ipc:weighted_quantile(mpls, 0.01*prcnts[ipc], sample_weight=self.result['weighted_samples']['weights']) for ipc in prcnts})
         
         summary_df = pd.DataFrame(summary_df).T
-        summary_df=pd.concat([summary_df,pd.DataFrame({'mean':result['logz'],'sd':result['logzerr']},index=['logEvidence'])])
-        summary_df.to_csv(os.path.join(self.outfileloc,self.name+"_"+self.kprior+"k_results.csv"))
-        #[K*np.sqrt(result['logzerr']**2+result['logzerr']**2)]},index=['BayesFact'])
+        summary_df=pd.concat([summary_df,pd.DataFrame({'mean':self.result['logz'],'sd':self.result['logzerr']},index=['logEvidence'])])
+        summary_df.to_csv(os.path.join(self.outfileloc,self.name+"_"+self.kprior+"k_self.results.csv"))
+        #[K*np.sqrt(self.result['logzerr']**2+self.result['logzerr']**2)]},index=['BayesFact'])
         return summary_df
 
 
-def run(tic,kprior='log', fit_curv=True, fit_circ=False, resume=True, outfileloc="/home/hosborn/home1/python/RVultra/NewUltranestOutputs"):
+# def run(tic,kprior='log', fit_curv=True, fit_circ=False, resume=True, outfileloc="/home/hosborn/home1/python/RVultra/NewUltranestOutputs"):
     
-    stars=pd.read_excel("/home/hosborn/home1/python/RVultra/AllTargetInfo.xlsx", sheet_name='stars')
-    stars=stars.loc[(stars["In paper?"]==1)&(stars["Needs validation"]>0)]
-    star=stars.loc[stars['TIC'].values.astype(int)==int(tic)]
-    if type(star)==pd.DataFrame:
-        star=star.iloc[0]#(stars["In paper?"]==1)&(stars["Needs validation"]>0)&(stars['TIC']==128703021)].iloc[0]
-    pls=pd.read_excel("/home/hosborn/home1/python/RVultra/AllTargetInfo.xlsx", sheet_name='planets')
-    pl=pls.loc[pls['TIC']==tic]
+#     stars=pd.read_excel("/home/hosborn/home1/python/RVultra/AllTargetInfo.xlsx", sheet_name='stars')
+#     stars=stars.loc[(stars["In paper?"]==1)&(stars["Needs validation"]>0)]
+#     star=stars.loc[stars['TIC'].values.astype(int)==int(tic)]
+#     if type(star)==pd.DataFrame:
+#         star=star.iloc[0]#(stars["In paper?"]==1)&(stars["Needs validation"]>0)&(stars['TIC']==128703021)].iloc[0]
+#     pls=pd.read_excel("/home/hosborn/home1/python/RVultra/AllTargetInfo.xlsx", sheet_name='planets')
+#     pl=pls.loc[pls['TIC']==tic]
     
-    # Define global planetary system and dataset parameters
-    starname = star['Paper name'].replace(" ","")
-    print(outfileloc,starname+"_"+kprior+"K")
-    print(os.path.join(outfileloc,starname+"_"+kprior+"K"))
+#     # Define global planetary system and dataset parameters
+#     starname = star['Paper name'].replace(" ","")
+#     print(outfileloc,starname+"_"+kprior+"K")
+#     print(os.path.join(outfileloc,starname+"_"+kprior+"K"))
 
-    #print(star['mass'],star['radius'],type(star['radius']),type(star['mass']))
-    resume=True if (resume=="True" or resume=="1") else "overwrite"
-    lik=Vector_PlanetLikelihood(name=starname,kprior=kprior, fit_curv=fit_curv)
-    lik.add_starpars(Ms=star['mass'], Rs=star['radius'])
+#     #print(star['mass'],star['radius'],type(star['radius']),type(star['mass']))
+#     resume=True if (resume=="True" or resume=="1") else "overwrite"
+#     lik=Vector_PlanetLikelihood(name=starname,kprior=kprior, fit_curv=fit_curv)
+#     lik.add_starpars(Ms=star['mass'], Rs=star['radius'])
     
-    data=assemble_all_rvs("/home/hosborn/home1/python/RVultra/allrvs/"+starname)
-    lik.add_data(time=data['time'].values,rvs=data['mnvel'].values,rv_errs=data['errvel'].values,instr=data['instr'].values)
-    for i_p,ipl in enumerate(pl.iterrows()):
-        if ipl[1]['type']=='rv':
-            lik.add_rv_planet(per=ipl[1]['period'],tcen=2457000+ipl[1]['tcen1'],fit_circ=True)
-        else:
-            iper=ipl[1]['period'] if (~pd.isnull(ipl[1]['period']))&(ipl[1]['period']!='per') else ipl[1]['true period']
-            lik.add_transiting_planet(plname=(ipl[1]['Paper name']+ipl[1]['name']).replace(' ',''),
-                                      per=iper,tcen=np.nanmax(ipl[1][['tcen1','tcen2','tcen3']].values),
-                                      Rp_Rs=ipl[1]['rprs'],tdur=ipl[1]['duration'],
-                                      bmu=ipl[1]['bmu'], bsigma=ipl[1]['bsigma'],
-                                      model_params=['logk'],fix_params=['per','tc'],fit_circ=False)
+#     data=assemble_all_rvs("/home/hosborn/home1/python/RVultra/allrvs/"+starname)
+#     lik.add_data(time=data['time'].values,rvs=data['mnvel'].values,rv_errs=data['errvel'].values,instr=data['instr'].values)
+#     for i_p,ipl in enumerate(pl.iterrows()):
+#         if ipl[1]['type']=='rv':
+#             lik.add_rv_planet(per=ipl[1]['period'],tcen=2457000+ipl[1]['tcen1'],fit_circ=True)
+#         else:
+#             iper=ipl[1]['period'] if (~pd.isnull(ipl[1]['period']))&(ipl[1]['period']!='per') else ipl[1]['true period']
+#             lik.add_transiting_planet(plname=(ipl[1]['Paper name']+ipl[1]['name']).replace(' ',''),
+#                                       per=iper,tcen=np.nanmax(ipl[1][['tcen1','tcen2','tcen3']].values),
+#                                       Rp_Rs=ipl[1]['rprs'],tdur=ipl[1]['duration'],
+#                                       bmu=ipl[1]['bmu'], bsigma=ipl[1]['bsigma'],
+#                                       model_params=['logk'],fix_params=['per','tc'],fit_circ=False)
 
-    lik.init_model()
-    #plinfo=plinfo, data=data, varnames=list(varpars.keys()), 
+#     lik.init_model()
+#     #plinfo=plinfo, data=data, varnames=list(varpars.keys()), 
                                 
-    #print(star['mass'], star['radius'], refepoch, pl.shape[0], plinfo, kprior, fit_curv,resume)
-    fixsampler = ultranest.ReactiveNestedSampler(lik.varnames, lik, VectorPriorTransform(lik.varpars), 
-                                                log_dir=os.path.join(outfileloc,starname+"_"+kprior+"K"),
-                                                resume=resume,vectorized=True,
-                                                wrapped_params=['w_' in par for par in lik.varnames])
-    result = fixsampler.run()
-    fixsampler.print_results()
+#     #print(star['mass'], star['radius'], refepoch, pl.shape[0], plinfo, kprior, fit_curv,resume)
+#     fixsampler = ultranest.ReactiveNestedSampler(lik.varnames, lik, VectorPriorTransform(lik.varpars), 
+#                                                 log_dir=os.path.join(outfileloc,starname+"_"+kprior+"K"),
+#                                                 resume=resume,vectorized=True,
+#                                                 wrapped_params=['w_' in par for par in lik.varnames])
+#     result = fixsampler.run()
+#     fixsampler.print_results()
 
-    fixsampler.plot_run()
-    fixsampler.plot_trace()
-    fixsampler.plot_corner()
+#     fixsampler.plot_run()
+#     fixsampler.plot_trace()
+#     fixsampler.plot_corner()
 
-    lik.plot(fixsampler.results['weighted_samples']['points'], fixsampler.results['weighted_samples']['weights'], os.path.join(outfileloc,starname+"_"+kprior+"K","plots"))
+#     lik.plot(fixsampler.results['weighted_samples']['points'], fixsampler.results['weighted_samples']['weights'], os.path.join(outfileloc,starname+"_"+kprior+"K","plots"))
     
-    flatvarpars={vpk:varpars[vpk] for vpk in varpars if vpk[:4] in ['poly','jitt','logj','offs']}
-    flatlik=Vector_FlatLikelihood(data,varnames=list(flatvarpars.keys()), jitprior=kprior, fit_curv=fit_curv)
-    flatsampler = ultranest.ReactiveNestedSampler(list(flatvarpars.keys()), flatlik, VectorPriorTransform(flatvarpars), 
-                                                log_dir=os.path.join(outfileloc,starname+"_"+kprior+"nopl"),
-                                                resume=resume, vectorized=True)
-    flatresult = flatsampler.run()
-    K = np.exp(result['logz'] - flatresult['logz'])
-    print("K = %.2f" % K)
-    print("The planetary model is %.2f times more probable than the no-planet model" % K)
-    idf1 = pd.DataFrame(data=result['samples'], columns=[c+"_plmodel" for c in result['paramnames']])
-    idf2 = pd.DataFrame(data=flatresult['samples'], columns=[c+"_noplmodel" for c in flatresult['paramnames']])
-    df = pd.concat([pd.DataFrame({'mean':[K],'std':[K*np.sqrt(result['logzerr']**2+result['logzerr']**2)]},index=['BayesFact']),idf1.describe().T,idf2.describe().T])
-    df.to_csv(os.path.join(outfileloc,starname+"_"+kprior+"K","results.csv"))
+#     flatvarpars={vpk:varpars[vpk] for vpk in varpars if vpk[:4] in ['poly','jitt','logj','offs']}
+#     flatlik=Vector_FlatLikelihood(data,varnames=list(flatvarpars.keys()), jitprior=kprior, fit_curv=fit_curv)
+#     flatsampler = ultranest.ReactiveNestedSampler(list(flatvarpars.keys()), flatlik, VectorPriorTransform(flatvarpars), 
+#                                                 log_dir=os.path.join(outfileloc,starname+"_"+kprior+"nopl"),
+#                                                 resume=resume, vectorized=True)
+#     flatresult = flatsampler.run()
+#     K = np.exp(result['logz'] - flatresult['logz'])
+#     print("K = %.2f" % K)
+#     print("The planetary model is %.2f times more probable than the no-planet model" % K)
+#     idf1 = pd.DataFrame(data=result['samples'], columns=[c+"_plmodel" for c in result['paramnames']])
+#     idf2 = pd.DataFrame(data=flatresult['samples'], columns=[c+"_noplmodel" for c in flatresult['paramnames']])
+#     df = pd.concat([pd.DataFrame({'mean':[K],'std':[K*np.sqrt(result['logzerr']**2+result['logzerr']**2)]},index=['BayesFact']),idf1.describe().T,idf2.describe().T])
+#     df.to_csv(os.path.join(outfileloc,starname+"_"+kprior+"K","results.csv"))
 
-    return lik, fixsampler
+#     return lik, fixsampler
 
-if __name__=="__main__":
-    import argparse
+# if __name__=="__main__":
+#     import argparse
     
     
-    # Initialize parser
-    parser = argparse.ArgumentParser()
+#     # Initialize parser
+#     parser = argparse.ArgumentParser()
     
-    # Adding optional argument
-    parser.add_argument("-t", "--TIC", help = "TESS Input Catalog number")
-    parser.add_argument("-kp", "--Kprior", help = "Prior on semi-amplitude K; either linear or log")
-    parser.add_argument("-c", "--curv", help = "Whether to include curvature in the background fit or not")
-    parser.add_argument("-r", "--resume", help = "Whether to resume or not")
-    parser.add_argument("-o", "--outfileloc", help = "Output file location")
+#     # Adding optional argument
+#     parser.add_argument("-t", "--TIC", help = "TESS Input Catalog number")
+#     parser.add_argument("-kp", "--Kprior", help = "Prior on semi-amplitude K; either linear or log")
+#     parser.add_argument("-c", "--curv", help = "Whether to include curvature in the background fit or not")
+#     parser.add_argument("-r", "--resume", help = "Whether to resume or not")
+#     parser.add_argument("-o", "--outfileloc", help = "Output file location")
 
-    args = parser.parse_args()
-    _=run(int(args.TIC), kprior=args.Kprior, fit_curv=bool(args.curv),resume=args.resume,
-          outfileloc=args.outfileloc)
+#     args = parser.parse_args()
+#     _=run(int(args.TIC), kprior=args.Kprior, fit_curv=bool(args.curv),resume=args.resume,
+#           outfileloc=args.outfileloc)
 # result = fixsampler.run(max_ncalls=25000)
 # fixsampler.print_results()
 
