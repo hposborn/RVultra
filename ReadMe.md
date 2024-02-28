@@ -12,7 +12,7 @@ Do you want to:
 
 Then *RVUltra* is for you. It uses Ultranest but hides the silly syntax in an easy-to-use pythonic UI for use in scripts and notebooks.
 
-To see an example try [here] for which the output can be found here: (https://github.com/hposborn/RVultra/blob/main/RVultra%20Example.ipynb).
+To see an example try [here](https://github.com/hposborn/RVultra/blob/main/RVultra%20Example.ipynb) for which the output can be found here: 
 
 ![G 75-21 RVs with planetary models](https://github.com/hposborn/RVultra/blob/main/G%2075-21fit_rvmodel_plot.png?raw=true)
 
